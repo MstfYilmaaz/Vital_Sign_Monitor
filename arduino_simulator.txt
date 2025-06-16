@@ -1,0 +1,222 @@
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_PCD8544.h>
+
+// LCD pinleri
+Adafruit_PCD8544 display = Adafruit_PCD8544(13, 11, 9, 10, 8);
+
+// Motor pinleri
+#define IN1 5
+#define IN2 6
+#define ENA 3
+
+// Switch pinleri
+#define SWITCH1 2
+#define SWITCH2 4
+
+const int motorSpeed = 150;
+
+int currentMode = -1;
+int lastMode    = -1;
+unsigned long lastSwitchCheck = 0;
+
+// --- “Uyandırılabilir” delay: her 50 ms’de bir switch kontrol edip
+//     mod değiştiyse hemen geri dönüyor. modeToStay parametresi
+//     değiştiğinde fonksiyondan çıkılır.
+void smartDelay(unsigned long ms, int modeToStay) {
+  unsigned long start   = millis();
+  unsigned long lastChk = start;
+  while (millis() - start < ms) {
+    if (millis() - lastChk >= 50) {
+      checkSwitches();
+      lastChk = millis();
+    }
+    if (currentMode != modeToStay) return;
+  }
+}
+
+void setup() {
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(ENA,  OUTPUT);
+
+  pinMode(SWITCH1, INPUT_PULLUP);
+  pinMode(SWITCH2, INPUT_PULLUP);
+
+  display.begin();
+  display.setContrast(50);
+  display.clearDisplay();
+  display.display();
+
+  Serial.begin(9600);
+}
+
+void loop() {
+  // Yarım saniyede bir de “normal” switch kontrolü
+  if (millis() - lastSwitchCheck >= 500) {
+    checkSwitches();
+    lastSwitchCheck = millis();
+  }
+
+  // Mod değiştiyse ekrana yaz ve nefes döngüsünü sıfırla
+  if (currentMode != lastMode) {
+    displayMode(currentMode);
+    resetBreathing();
+    lastMode = currentMode;
+  }
+
+  // Mod aktifse uygun fonksiyonu çağır
+  if (currentMode > 0) {
+    handleBreathing(currentMode);
+  } else {
+    stopMotor();
+  }
+}
+
+// --- Switch’leri oku ve currentMode’u 0–3 arasında ayarla ---
+void checkSwitches() {
+  bool sw1 = !digitalRead(SWITCH1); // LOW = basılı
+  bool sw2 = !digitalRead(SWITCH2);
+  int binary = (sw1 << 1) | sw2;
+
+  if      (binary == 0b10) currentMode = 1;
+  else if (binary == 0b01) currentMode = 2;
+  else if (binary == 0b11) currentMode = 3;
+  else                     currentMode = 0;
+}
+
+// --- Ekrana mod ve BPM yazdırma ---
+void displayMode(int mode) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("Mod:");
+
+  display.setTextSize(2);
+  display.setCursor(0, 10);
+  switch (mode) {
+    case 1:
+      display.println("Mod 1");
+      displayBPM(20);
+      break;
+    case 2:
+      display.println("Mod 2");
+      displayBPM(12);
+      break;
+    case 3:
+      display.println("Mod 3");
+      displayBPM(4);
+      break;
+    default:
+      display.println("Kapali");
+      break;
+  }
+  display.display();
+}
+
+void displayBPM(int bpm) {
+  display.setTextSize(1);
+  display.setCursor(0, 35);
+  display.print("BPM: ");
+  display.print(bpm);
+}
+
+void resetBreathing() {
+  // Gelecekte millis() tabanlı döngü eklemek için yer tutucu
+  stopMotor();
+}
+
+void handleBreathing(int mode) {
+  switch (mode) {
+    case 1: breathingMode1(); break;
+    case 2: breathingMode2(); break;
+    case 3: breathingMode3(); break;
+  }
+}
+
+// Fast (BPM: 20)
+void breathingMode1() {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  analogWrite(ENA, 200);
+  delay(1000);
+
+  stopMotor();
+  delay(500);
+
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  analogWrite(ENA, 200);
+  delay(1000);
+
+  stopMotor();
+  delay(500);
+}
+
+// Slow (BPM: 12)
+void breathingMode2() {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  analogWrite(ENA, motorSpeed);
+  delay(1500);
+
+  stopMotor();
+  delay(1000);
+
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  analogWrite(ENA, motorSpeed);
+  delay(1500);
+
+  stopMotor();
+  delay(1000);
+}
+
+// Apnoea (40 sn tutma, 2 nefes) 
+void breathingMode3() {
+  if (currentMode != 3) return;
+
+  // --- Apnoea: 40 saniye tut ---
+  stopMotor();
+  smartDelay(40000, 3); if (currentMode != 3) return;
+
+  // --- 2 nefes ---
+  // 1. inhale
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  analogWrite(ENA, 200);
+  smartDelay(2000, 3);  if (currentMode != 3) return;
+  stopMotor();
+  smartDelay(500, 3);   if (currentMode != 3) return;
+
+  // 1. exhale
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  analogWrite(ENA, 200);
+  smartDelay(2000, 3);  if (currentMode != 3) return;
+  stopMotor();
+  smartDelay(500, 3);   if (currentMode != 3) return;
+
+  // 2. inhale
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  analogWrite(ENA, 200);
+  smartDelay(2000, 3);  if (currentMode != 3) return;
+  stopMotor();
+  smartDelay(500, 3);   if (currentMode != 3) return;
+
+  // 2. exhale
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  analogWrite(ENA, 200);
+  smartDelay(2000, 3);  if (currentMode != 3) return;
+  stopMotor();
+  smartDelay(500, 3);
+}
+
+// Motoru durdur
+void stopMotor() {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  analogWrite(ENA, 0);
+}
